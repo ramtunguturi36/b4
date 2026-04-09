@@ -106,7 +106,12 @@ export default function BookView({
 
     const rect = frame.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
-    const clickX = e.clientX || e.touches?.[0]?.clientX;
+    
+    // Get click position from either mouse or touch event
+    let clickX = e.clientX;
+    if (!clickX && e.type?.includes("touch")) {
+      clickX = e.touches?.[0]?.clientX || e.changedTouches?.[0]?.clientX;
+    }
 
     if (!clickX) return;
 
@@ -128,7 +133,7 @@ export default function BookView({
         </button>
       )}
 
-      <div className="book-frame" ref={bookFrameRef} onClick={handleClickZone}>
+      <div className="book-frame" ref={bookFrameRef} onClick={handleClickZone} onTouchStart={handleClickZone}>
         <HTMLFlipBook
           ref={flipBookRef}
           key={`${chapterId}-${isMobile ? "mobile" : "desktop"}`}
@@ -138,7 +143,7 @@ export default function BookView({
           maxWidth={620}
           minHeight={460}
           maxHeight={760}
-          drawShadow
+          drawShadow={!isMobile}
           mobileScrollSupport
           showPageCorners={!isFullscreen}
           className="flipbook real-book"
@@ -148,7 +153,7 @@ export default function BookView({
           usePortrait={isMobile}
           startZIndex={0}
           autoSize
-          maxShadowOpacity={0.45}
+          maxShadowOpacity={isMobile ? 0.15 : 0.45}
           onFlip={(e) => onPageChange(e.data)}
         >
           {pages.map((blocks, index) => (
