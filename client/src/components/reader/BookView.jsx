@@ -91,6 +91,8 @@ export default function BookView({
     }, 750);
   }
 
+  const touchStartRef = useRef(null);
+
   function handleClickZone(e) {
     if (e.target?.closest?.(".book-nav") || e.target?.closest?.(".fullscreen-exit")) {
       return;
@@ -107,11 +109,8 @@ export default function BookView({
     const rect = frame.getBoundingClientRect();
     const centerX = rect.left + rect.width / 2;
     
-    // Get click position from either mouse or touch event
-    let clickX = e.clientX;
-    if (!clickX && e.type?.includes("touch")) {
-      clickX = e.touches?.[0]?.clientX || e.changedTouches?.[0]?.clientX;
-    }
+    // Get click position from mouse event only
+    const clickX = e.clientX;
 
     if (!clickX) return;
 
@@ -125,6 +124,43 @@ export default function BookView({
     }
   }
 
+  function handleTouchStart(e) {
+    // Store initial touch position for swipe detection
+    touchStartRef.current = {
+      x: e.touches?.[0]?.clientX,
+      y: e.touches?.[0]?.clientY,
+      time: Date.now(),
+    };
+  }
+
+  function handleTouchEnd(e) {
+    if (!touchStartRef.current) return;
+
+    const endX = e.changedTouches?.[0]?.clientX;
+    const endY = e.changedTouches?.[0]?.clientY;
+    const endTime = Date.now();
+
+    const deltaX = endX - touchStartRef.current.x;
+    const deltaY = Math.abs(endY - touchStartRef.current.y);
+    const deltaTime = endTime - touchStartRef.current.time;
+
+    // Only detect swipe if:
+    // - Primarily horizontal (not vertical scroll)
+    // - Quick swipe (under 500ms)
+    // - Not too small (at least 30px)
+    if (deltaTime < 500 && Math.abs(deltaX) > 30 && deltaY < Math.abs(deltaX)) {
+      if (deltaX > 0 && pageIndex > 0) {
+        // Swiped right: previous page
+        goToPreviousPage();
+      } else if (deltaX < 0 && pageIndex < pages.length - 1) {
+        // Swiped left: next page
+        goToNextPage();
+      }
+    }
+
+    touchStartRef.current = null;
+  }
+
   return (
     <div className={`book-stage ${isFullscreen ? "immersive" : ""}`}>
       {isFullscreen && (
@@ -133,7 +169,7 @@ export default function BookView({
         </button>
       )}
 
-      <div className="book-frame" ref={bookFrameRef} onClick={handleClickZone} onTouchStart={handleClickZone}>
+      <div className="book-frame" ref={bookFrameRef} onClick={handleClickZone} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
         <HTMLFlipBook
           ref={flipBookRef}
           key={`${chapterId}-${isMobile ? "mobile" : "desktop"}`}
