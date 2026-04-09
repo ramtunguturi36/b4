@@ -144,11 +144,11 @@ export default function BookView({
     const deltaY = Math.abs(endY - touchStartRef.current.y);
     const deltaTime = endTime - touchStartRef.current.time;
 
-    // Only detect swipe if:
-    // - Primarily horizontal (not vertical scroll)
-    // - Quick swipe (under 500ms)
-    // - Not too small (at least 30px)
-    if (deltaTime < 500 && Math.abs(deltaX) > 30 && deltaY < Math.abs(deltaX)) {
+    // Detect swipe if:
+    // - Primarily horizontal (vertical movement < horizontal movement)
+    // - Quick swipe (under 600ms)
+    // - Sufficient distance (at least 20px)
+    if (deltaTime < 600 && Math.abs(deltaX) > 20 && deltaY < Math.abs(deltaX) * 0.5) {
       if (deltaX > 0 && pageIndex > 0) {
         // Swiped right: previous page
         goToPreviousPage();
@@ -169,7 +169,19 @@ export default function BookView({
         </button>
       )}
 
-      <div className="book-frame" ref={bookFrameRef} onClick={handleClickZone} onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
+      <div className="book-frame" ref={bookFrameRef} onClick={handleClickZone}>
+        {/* Touch overlay to capture mobile swipes */}
+        <div
+          className="touch-overlay"
+          onTouchStart={handleTouchStart}
+          onTouchEnd={handleTouchEnd}
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 1,
+            pointerEvents: "auto",
+          }}
+        />
         <HTMLFlipBook
           ref={flipBookRef}
           key={`${chapterId}-${isMobile ? "mobile" : "desktop"}`}
