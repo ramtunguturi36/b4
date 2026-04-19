@@ -5,6 +5,7 @@ import BookPage from "./BookPage";
 export default function BookView({
   pages,
   chapterId,
+  resetToken,
   isMobile,
   isFullscreen,
   pageIndex,
@@ -184,7 +185,7 @@ export default function BookView({
         />
         <HTMLFlipBook
           ref={flipBookRef}
-          key={`${chapterId}-${isMobile ? "mobile" : "desktop"}`}
+          key={`${chapterId}-${isMobile ? "mobile" : "desktop"}-${resetToken}`}
           width={isMobile ? 340 : 560}
           height={isMobile ? 560 : 740}
           minWidth={300}
@@ -195,7 +196,7 @@ export default function BookView({
           mobileScrollSupport
           showPageCorners={!isFullscreen}
           className="flipbook real-book"
-          startPage={0}
+          startPage={pageIndex}
           flippingTime={700}
           disableFlipByClick
           usePortrait={isMobile}

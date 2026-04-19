@@ -17,6 +17,17 @@ const contentBlockSchema = new mongoose.Schema(
 
 const chapterSchema = new mongoose.Schema(
   {
+    book: {
+      type: String,
+      enum: ["book1", "book2"],
+      default: "book1",
+      index: true,
+    },
+    chapterNumber: {
+      type: Number,
+      default: null,
+      index: true,
+    },
     title: {
       type: String,
       required: true,

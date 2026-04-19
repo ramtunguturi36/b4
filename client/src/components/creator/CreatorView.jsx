@@ -1,470 +1,251 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  createDraft,
-  publishChapter,
+  publishManualChapter,
   removeChapterByNumber,
-  styleChapter,
-  updateChapter,
+  uploadMarkdownChapters,
 } from "../../api/chaptersApi";
-import PreviewPanel from "./PreviewPanel";
 
-function wait(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function isTransientError(message) {
-  const text = String(message || "").toLowerCase();
-  return (
-    text.includes("429") ||
-    text.includes("503") ||
-    text.includes("timeout") ||
-    text.includes("temporarily") ||
-    text.includes("overloaded") ||
-    text.includes("rate")
-  );
-}
-
-function isQuotaError(message) {
-  const text = String(message || "").toLowerCase();
-  return text.includes("429") && text.includes("quota");
-}
-
-async function runWithRetry(task) {
-  try {
-    return await task();
-  } catch (err) {
-    if (!isTransientError(err?.message)) {
-      throw err;
-    }
-
-    await wait(1200);
-    return task();
-  }
-}
-
-function parseBatchChapters(inputText) {
-  const text = String(inputText || "").replace(/\r\n/g, "\n");
-  const chapterHeaderRegex = /^##\s*CHAPTER\s+(\d+)\s*[—-]\s*(.+)$/gim;
-  const headers = [];
-  let match;
-
-  while ((match = chapterHeaderRegex.exec(text)) !== null) {
-    headers.push({
-      index: match.index,
-      fullMatch: match[0],
-      chapterNumber: match[1],
-      chapterName: match[2].trim(),
-    });
-  }
-
-  if (headers.length === 0) {
-    return [];
-  }
-
-  return headers
-    .map((header, idx) => {
-      const start = header.index + header.fullMatch.length;
-      const end = idx + 1 < headers.length ? headers[idx + 1].index : text.length;
-      let body = text.slice(start, end);
-
-      // Ignore trailing generator notes and continuations after chapter content.
-      body = body.split(/\*End of Chapters/i)[0];
-      body = body.split(/\*\*\[Continues/i)[0];
-      body = body.replace(/^\s*---+\s*/gm, "").trim();
-
-      return {
-        title: `Chapter ${header.chapterNumber} — ${header.chapterName}`,
-        rawText: body,
-      };
-    })
-    .filter((item) => item.rawText.length > 0);
-}
-
-export default function CreatorView({ onPublished }) {
-  const [chapterId, setChapterId] = useState("");
-  const [title, setTitle] = useState("");
-  const [rawText, setRawText] = useState("");
-  const [styledContent, setStyledContent] = useState([]);
-  const [removeChapterNumber, setRemoveChapterNumber] = useState("");
-  const [loading, setLoading] = useState(false);
+export default function CreatorView({ selectedBook, onPublished }) {
+  const [chapterNumberInput, setChapterNumberInput] = useState("");
+  const [chapterTitleInput, setChapterTitleInput] = useState("");
+  const [chapterTextInput, setChapterTextInput] = useState("");
+  const [removeChapterNumberInput, setRemoveChapterNumberInput] = useState("");
+  const [markdownText, setMarkdownText] = useState("");
+  const [markdownFileName, setMarkdownFileName] = useState("");
+  const [loadingSinglePublish, setLoadingSinglePublish] = useState(false);
+  const [loadingBatchPublish, setLoadingBatchPublish] = useState(false);
+  const [loadingDelete, setLoadingDelete] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
-  const [resumeFromChapterNumber, setResumeFromChapterNumber] = useState(null);
 
-  async function ensureDraft() {
-    if (chapterId) return chapterId;
-
-    const draft = await createDraft({ title, rawText });
-    setChapterId(draft._id);
-    return draft._id;
-  }
-
-  async function handleStyleWithAI() {
-    setError("");
+  useEffect(() => {
     setStatus("");
-
-    if (!title.trim() || !rawText.trim()) {
-      setError("Please add chapter title and raw text first.");
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      const id = await ensureDraft();
-      const styled = await styleChapter({ title: title.trim(), rawText });
-      setStyledContent(styled.content || []);
-
-      await updateChapter(id, {
-        title: styled.title || title,
-        rawText,
-        content: styled.content || [],
-      });
-
-      setStatus("Chapter styled successfully. Review preview before publishing.");
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handlePublish() {
     setError("");
+    setChapterNumberInput("");
+    setChapterTitleInput("");
+    setChapterTextInput("");
+    setRemoveChapterNumberInput("");
+    setMarkdownText("");
+    setMarkdownFileName("");
+  }, [selectedBook]);
+
+  async function handlePublishSingleChapter() {
     setStatus("");
-
-    if (!styledContent.length) {
-      setError("Style the chapter before publishing.");
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      const id = await ensureDraft();
-
-      await updateChapter(id, {
-        title,
-        rawText,
-        content: styledContent,
-      });
-
-      await publishChapter(id);
-      setStatus("Chapter published and visible in reader view.");
-      onPublished();
-
-      setChapterId("");
-      setTitle("");
-      setRawText("");
-      setStyledContent([]);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleBatchStyleAndPublish() {
     setError("");
-    setStatus("");
 
-    const parsedChapters = parseBatchChapters(rawText);
-
-    if (parsedChapters.length === 0) {
-      setError("No chapters found. Use headings like: ## CHAPTER 31 — Title");
-      return;
-    }
-
-    setLoading(true);
-
-    let publishedCount = 0;
-    const failedChapters = [];
-    let quotaHitAt = null;
-
-    try {
-      for (let idx = 0; idx < parsedChapters.length; idx++) {
-        const chapter = parsedChapters[idx];
-        
-        try {
-          const draft = await runWithRetry(() => createDraft({
-            title: chapter.title,
-            rawText: chapter.rawText,
-          }));
-
-          const styled = await runWithRetry(() => styleChapter({
-            title: chapter.title,
-            rawText: chapter.rawText,
-          }));
-
-          await runWithRetry(() => updateChapter(draft._id, {
-            title: styled.title || chapter.title,
-            rawText: chapter.rawText,
-            content: styled.content || [],
-          }));
-
-          await runWithRetry(() => publishChapter(draft._id));
-
-          publishedCount += 1;
-          setTitle(styled.title || chapter.title);
-          setStyledContent(styled.content || []);
-        } catch (chapterError) {
-          // Quota error: stop immediately, don't retry or continue.
-          if (isQuotaError(chapterError?.message)) {
-            quotaHitAt = chapter.title;
-            failedChapters.push({
-              title: chapter.title,
-              message: chapterError.message,
-            });
-            break;  // STOP here, don't continue to next chapter.
-          }
-
-          // Other errors: collect and continue.
-          failedChapters.push({
-            title: chapter.title,
-            message: chapterError.message,
-          });
-        }
-
-        // Small pacing gap helps avoid provider burst-rate failures in batch mode.
-        await wait(250);
-      }
-
-      setChapterId("");
-
-      if (publishedCount > 0) {
-        onPublished();
-      }
-
-      if (quotaHitAt) {
-        // Set resume point for next batch attempt.
-        const nextChapterNumber = parseInt(quotaHitAt.match(/\d+/)?.[0] || "1", 10);
-        setResumeFromChapterNumber(nextChapterNumber);
-
-        setStatus(
-          `⚠️ Quota limit hit! Published ${publishedCount}/${parsedChapters.length}. Resume from ${quotaHitAt}`
-        );
-        setError(
-          `Quota exhausted at ${quotaHitAt}. ${quotaHitAt}: ${failedChapters[0]?.message || "Quota exceeded"}. ` +
-          `Wait for daily reset, enable billing, or use alternate API key. Then click "Resume" below.`
-        );
-      } else if (failedChapters.length === 0) {
-        setStatus(`✅ Batch complete. Styled and published ${publishedCount} chapter(s).`);
-        setResumeFromChapterNumber(null);
-      } else {
-        const failedTitles = failedChapters.map((item) => item.title).join(", ");
-        const failedReasons = failedChapters
-          .map((item) => `${item.title}: ${item.message}`)
-          .join(" | ");
-
-        setStatus(
-          `Batch partially completed. Published ${publishedCount}/${parsedChapters.length}. Failed: ${failedTitles}`
-        );
-        setError(`Failure reasons: ${failedReasons}`);
-      }
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleResumeFromChapter() {
-    if (!resumeFromChapterNumber) return;
-
-    setError("");
-    setStatus("");
-    
-    const parsedChapters = parseBatchChapters(rawText);
-    const resumeIdx = parsedChapters.findIndex((ch) => {
-      const num = parseInt(ch.title.match(/\d+/)?.[0] || "0", 10);
-      return num >= resumeFromChapterNumber;
-    });
-
-    if (resumeIdx === -1) {
-      setError("Could not find chapter to resume from. Re-check raw text.");
-      return;
-    }
-
-    setLoading(true);
-
-    let publishedCount = 0;
-    const failedChapters = [];
-    let quotaHitAt = null;
-
-    try {
-      for (let idx = resumeIdx; idx < parsedChapters.length; idx++) {
-        const chapter = parsedChapters[idx];
-
-        try {
-          const draft = await runWithRetry(() => createDraft({
-            title: chapter.title,
-            rawText: chapter.rawText,
-          }));
-
-          const styled = await runWithRetry(() => styleChapter({
-            title: chapter.title,
-            rawText: chapter.rawText,
-          }));
-
-          await runWithRetry(() => updateChapter(draft._id, {
-            title: styled.title || chapter.title,
-            rawText: chapter.rawText,
-            content: styled.content || [],
-          }));
-
-          await runWithRetry(() => publishChapter(draft._id));
-
-          publishedCount += 1;
-          setTitle(styled.title || chapter.title);
-          setStyledContent(styled.content || []);
-        } catch (chapterError) {
-          if (isQuotaError(chapterError?.message)) {
-            quotaHitAt = chapter.title;
-            failedChapters.push({
-              title: chapter.title,
-              message: chapterError.message,
-            });
-            break;  // STOP, don't continue.
-          }
-
-          failedChapters.push({
-            title: chapter.title,
-            message: chapterError.message,
-          });
-        }
-
-        await wait(250);
-      }
-
-      setChapterId("");
-
-      if (publishedCount > 0) {
-        onPublished();
-      }
-
-      if (quotaHitAt) {
-        const nextChapterNumber = parseInt(quotaHitAt.match(/\d+/)?.[0] || "1", 10);
-        setResumeFromChapterNumber(nextChapterNumber);
-
-        setStatus(
-          `⚠️ Quota hit again! Published ${publishedCount} more. Resume from ${quotaHitAt}`
-        );
-        setError(
-          `Quota exhausted again at ${quotaHitAt}. ` +
-          `Once quota is available (wait/billing), click "Resume" to continue.`
-        );
-      } else if (failedChapters.length === 0) {
-        setStatus(`✅ Resume complete. Published ${publishedCount} chapter(s).`);
-        setResumeFromChapterNumber(null);
-      } else {
-        const failedTitles = failedChapters.map((item) => item.title).join(", ");
-        setStatus(
-          `Resumed and published ${publishedCount} chapter(s). Some failed: ${failedTitles}`
-        );
-        setResumeFromChapterNumber(null);
-      }
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function handleRemoveByChapterNumber() {
-    setError("");
-    setStatus("");
-
-    const chapterNumber = Number.parseInt(removeChapterNumber, 10);
+    const chapterNumber = Number.parseInt(chapterNumberInput, 10);
 
     if (!Number.isInteger(chapterNumber) || chapterNumber < 1) {
-      setError("Enter a valid chapter number to remove.");
+      setError("Enter a valid chapter number.");
       return;
     }
 
-    setLoading(true);
+    if (!chapterTextInput.trim()) {
+      setError("Chapter content cannot be empty.");
+      return;
+    }
+
+    setLoadingSinglePublish(true);
 
     try {
-      const response = await removeChapterByNumber(chapterNumber);
-      setStatus(`${response.message}. Removed: ${response.deletedCount ?? 0}`);
-      setRemoveChapterNumber("");
+      const title = selectedBook === "book1"
+        ? (chapterTitleInput.trim() || `Chapter ${chapterNumber}`)
+        : `Chapter ${chapterNumber}`;
+
+      await publishManualChapter({
+        book: selectedBook,
+        chapterNumber,
+        title,
+        rawText: chapterTextInput,
+      });
+
+      setStatus(`Published Chapter ${chapterNumber} in ${selectedBook.toUpperCase()}.`);
+      setChapterNumberInput("");
+      setChapterTitleInput("");
+      setChapterTextInput("");
       onPublished();
     } catch (err) {
-      setError(err.message);
+      setError(err.message || "Failed to publish chapter.");
     } finally {
-      setLoading(false);
+      setLoadingSinglePublish(false);
+    }
+  }
+
+  function handleMarkdownFileChange(event) {
+    const file = event.target.files?.[0];
+
+    if (!file) {
+      return;
+    }
+
+    const isAllowed = file.name.toLowerCase().endsWith(".md") || file.name.toLowerCase().endsWith(".txt");
+
+    if (!isAllowed) {
+      setError("Upload a .md or .txt file for Book1 batch publish.");
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = typeof reader.result === "string" ? reader.result : "";
+      setMarkdownText(text);
+      setMarkdownFileName(file.name);
+      setStatus(`Loaded ${file.name}. Ready to publish.`);
+      setError("");
+    };
+    reader.readAsText(file);
+  }
+
+  async function handlePublishMarkdownBatch() {
+    setStatus("");
+    setError("");
+
+    if (!markdownText.trim()) {
+      setError("Upload an MD/TXT file first.");
+      return;
+    }
+
+    setLoadingBatchPublish(true);
+
+    try {
+      const result = await uploadMarkdownChapters({
+        book: "book1",
+        markdown: markdownText,
+      });
+
+      setStatus(`${result.message} Extracted and published successfully.`);
+      setMarkdownText("");
+      setMarkdownFileName("");
+      onPublished();
+    } catch (err) {
+      setError(err.message || "Batch publish failed.");
+    } finally {
+      setLoadingBatchPublish(false);
+    }
+  }
+
+  async function handleRemoveChapter() {
+    setStatus("");
+    setError("");
+
+    const chapterNumber = Number.parseInt(removeChapterNumberInput, 10);
+
+    if (!Number.isInteger(chapterNumber) || chapterNumber < 1) {
+      setError("Enter a valid chapter number to delete.");
+      return;
+    }
+
+    setLoadingDelete(true);
+
+    try {
+      const result = await removeChapterByNumber(chapterNumber, selectedBook);
+      setStatus(`${result.message}. Removed ${result.deletedCount ?? 0} item(s).`);
+      setRemoveChapterNumberInput("");
+      onPublished();
+    } catch (err) {
+      setError(err.message || "Failed to remove chapter.");
+    } finally {
+      setLoadingDelete(false);
     }
   }
 
   return (
     <section className="creator-shell">
       <div className="editor-card">
-        <h2>Creator Dashboard</h2>
-        <p className="muted">Draft chapters, style with Gemini, preview formatting, and publish instantly.</p>
-
-        <label htmlFor="chapter-title">Chapter Title</label>
-        <input
-          id="chapter-title"
-          type="text"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Chapter 1: The Lantern in Rain"
-        />
-
-        <label htmlFor="raw-text">Raw Chapter Text</label>
-        <textarea
-          id="raw-text"
-          value={rawText}
-          onChange={(e) => setRawText(e.target.value)}
-          placeholder="Paste chapter text here OR paste batch with headings like: ## CHAPTER 31 — Title"
-          rows={12}
-        />
+        <h2>{selectedBook.toUpperCase()} Upload Dashboard</h2>
         <p className="muted">
-          Batch mode: paste multiple chapters using <strong>## CHAPTER number — title</strong> headings, then click
-          &nbsp;<strong>Batch: Style + Publish</strong>.
+          {selectedBook === "book1"
+            ? "Book1 supports single chapter publish and direct MD batch publish."
+            : "Book2 supports one chapter at a time without styling."}
         </p>
 
+        <label htmlFor="chapter-number">Chapter Number</label>
+        <input
+          id="chapter-number"
+          type="number"
+          min="1"
+          value={chapterNumberInput}
+          onChange={(event) => setChapterNumberInput(event.target.value)}
+          placeholder="41"
+        />
+
+        {selectedBook === "book1" && (
+          <>
+            <label htmlFor="chapter-title">Chapter Title (optional)</label>
+            <input
+              id="chapter-title"
+              type="text"
+              value={chapterTitleInput}
+              onChange={(event) => setChapterTitleInput(event.target.value)}
+              placeholder="Chapter 41 — Title"
+            />
+          </>
+        )}
+
+        <label htmlFor="chapter-content">Chapter Content</label>
+        <textarea
+          id="chapter-content"
+          rows={12}
+          value={chapterTextInput}
+          onChange={(event) => setChapterTextInput(event.target.value)}
+          placeholder={selectedBook === "book1" ? "Paste one chapter content" : "Paste one chapter content like book2 format"}
+        />
+
         <div className="creator-actions">
-          <button className="accent" onClick={handleStyleWithAI} disabled={loading}>
-            {loading ? "Styling..." : "Style with AI"}
+          <button
+            className="publish"
+            type="button"
+            onClick={handlePublishSingleChapter}
+            disabled={loadingSinglePublish || loadingBatchPublish || loadingDelete}
+          >
+            {loadingSinglePublish ? "Publishing..." : "Publish Single Chapter"}
           </button>
-          <button className="publish" onClick={handlePublish} disabled={loading || !styledContent.length}>
-            Publish
-          </button>
-          <button type="button" onClick={handleBatchStyleAndPublish} disabled={loading || !rawText.trim()}>
-            {loading ? "Processing..." : "Batch: Style + Publish"}
-          </button>
-          {resumeFromChapterNumber && (
-            <button
-              type="button"
-              onClick={handleResumeFromChapter}
-              disabled={loading}
-              className="accent"
-              title={`Resume batch from Chapter ${resumeFromChapterNumber}`}
-            >
-              {loading ? "Resuming..." : `Resume from Ch. ${resumeFromChapterNumber}`}
-            </button>
-          )}
         </div>
+
+        {selectedBook === "book1" && (
+          <>
+            <label htmlFor="md-upload">Upload Book1 MD/TXT File (multi chapter)</label>
+            <input
+              id="md-upload"
+              type="file"
+              accept=".md,.txt,text/markdown,text/plain"
+              onChange={handleMarkdownFileChange}
+            />
+            {markdownFileName && <p className="muted">Loaded file: {markdownFileName}</p>}
+            <div className="creator-actions">
+              <button
+                className="accent"
+                type="button"
+                onClick={handlePublishMarkdownBatch}
+                disabled={loadingSinglePublish || loadingBatchPublish || loadingDelete || !markdownText.trim()}
+              >
+                {loadingBatchPublish ? "Publishing Batch..." : "Publish MD Batch Immediately"}
+              </button>
+            </div>
+          </>
+        )}
 
         <div className="creator-actions creator-remove-row">
           <input
             type="number"
             min="1"
-            value={removeChapterNumber}
-            onChange={(e) => setRemoveChapterNumber(e.target.value)}
+            value={removeChapterNumberInput}
+            onChange={(event) => setRemoveChapterNumberInput(event.target.value)}
             placeholder="Chapter number"
             aria-label="Chapter number to remove"
           />
-          <button type="button" onClick={handleRemoveByChapterNumber} disabled={loading || !removeChapterNumber.trim()}>
-            Remove by Chapter #
+          <button
+            type="button"
+            onClick={handleRemoveChapter}
+            disabled={loadingSinglePublish || loadingBatchPublish || loadingDelete || !removeChapterNumberInput.trim()}
+          >
+            {loadingDelete ? "Removing..." : "Remove by Chapter #"}
           </button>
         </div>
 
         {status && <p className="status success">{status}</p>}
         {error && <p className="status error">{error}</p>}
       </div>
-
-      <PreviewPanel title={title} content={styledContent} />
     </section>
   );
 }

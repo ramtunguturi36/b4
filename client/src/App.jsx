@@ -4,6 +4,7 @@ import ReaderView from "./components/reader/ReaderView";
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("reader");
+  const [selectedBook, setSelectedBook] = useState("book1");
   const [theme, setTheme] = useState("light");
   const [refreshSignal, setRefreshSignal] = useState(0);
   const [immersiveMode, setImmersiveMode] = useState(false);
@@ -30,18 +31,36 @@ export default function App() {
             Creator
           </button>
         </div>
+        <div className="tabs">
+          <button
+            className={selectedBook === "book1" ? "active" : ""}
+            onClick={() => setSelectedBook("book1")}
+          >
+            Book1
+          </button>
+          <button
+            className={selectedBook === "book2" ? "active" : ""}
+            onClick={() => setSelectedBook("book2")}
+          >
+            Book2
+          </button>
+        </div>
       </header>
 
       <main>
         {activeTab === "reader" ? (
           <ReaderView
-            key={refreshSignal}
+            key={`${selectedBook}-${refreshSignal}`}
+            selectedBook={selectedBook}
             theme={theme}
             onToggleTheme={toggleTheme}
             onImmersiveChange={setImmersiveMode}
           />
         ) : (
-          <CreatorView onPublished={() => setRefreshSignal((v) => v + 1)} />
+          <CreatorView
+            selectedBook={selectedBook}
+            onPublished={() => setRefreshSignal((v) => v + 1)}
+          />
         )}
       </main>
     </div>

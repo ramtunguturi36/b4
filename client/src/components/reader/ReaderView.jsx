@@ -1,16 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getPublishedChapter, listPublishedChapters } from "../../api/chaptersApi";
+import {
+  downloadPublishedChaptersEpub,
+  downloadPublishedChaptersPdf,
+  getPublishedChapter,
+  listPublishedChapters,
+} from "../../api/chaptersApi";
 import { paginateContent } from "../../utils/paginateContent";
 import BookView from "./BookView";
 
-function extractChapterNumber(title) {
-  const match = String(title || "").match(/\d+/);
-  return match ? Number(match[0]) : Number.POSITIVE_INFINITY;
+function extractChapterNumber(chapter) {
+  if (Number.isInteger(chapter?.chapterNumber) && chapter.chapterNumber > 0) {
+    return chapter.chapterNumber;
+  }
+
+  const match = String(chapter?.title || "").match(/^\s*chapter\s*(\d+)\b/i);
+  return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
 }
 
 function sortChapters(a, b) {
-  const aNum = extractChapterNumber(a.title);
-  const bNum = extractChapterNumber(b.title);
+  const aNum = extractChapterNumber(a);
+  const bNum = extractChapterNumber(b);
 
   if (Number.isFinite(aNum) && Number.isFinite(bNum) && aNum !== bNum) {
     return aNum - bNum;
@@ -19,17 +28,22 @@ function sortChapters(a, b) {
   return new Date(a.createdAt || a.updatedAt || 0) - new Date(b.createdAt || b.updatedAt || 0);
 }
 
-export default function ReaderView({ theme, onToggleTheme, onImmersiveChange }) {
+export default function ReaderView({ selectedBook, theme, onToggleTheme, onImmersiveChange }) {
   const [chapters, setChapters] = useState([]);
   const [pageIndex, setPageIndex] = useState(0);
+  const [bookResetToken, setBookResetToken] = useState(0);
   const [pageJumpInput, setPageJumpInput] = useState("");
   const [chapterJumpInput, setChapterJumpInput] = useState("");
+  const [exportFromChapter, setExportFromChapter] = useState("");
+  const [exportToChapter, setExportToChapter] = useState("");
   const [loading, setLoading] = useState(false);
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
+  const [downloadingEpub, setDownloadingEpub] = useState(false);
   const [error, setError] = useState("");
   const [isMobile, setIsMobile] = useState(window.innerWidth < 900);
   const [isFullscreen, setIsFullscreen] = useState(Boolean(document.fullscreenElement));
   const [isBookOpen, setIsBookOpen] = useState(false);
-  const [coverImage, setCoverImage] = useState(() => localStorage.getItem("readerCoverImage") || "");
+  const [coverImage, setCoverImage] = useState("");
   const coverInputRef = useRef(null);
 
   useEffect(() => {
@@ -37,6 +51,11 @@ export default function ReaderView({ theme, onToggleTheme, onImmersiveChange }) 
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
+
+  useEffect(() => {
+    const coverKey = `readerCoverImage:${selectedBook}`;
+    setCoverImage(localStorage.getItem(coverKey) || "");
+  }, [selectedBook]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -59,12 +78,12 @@ export default function ReaderView({ theme, onToggleTheme, onImmersiveChange }) 
       setError("");
 
       try {
-        const list = await listPublishedChapters();
+        const list = await listPublishedChapters(selectedBook);
         const sorted = [...list].sort(sortChapters);
 
-        const detailedResults = await Promise.all(
+        const details = await Promise.all(
           sorted.map(async (item) => {
-            const chapter = await getPublishedChapter(item._id);
+            const chapter = await getPublishedChapter(item._id, selectedBook);
             return {
               ...item,
               ...chapter,
@@ -72,20 +91,18 @@ export default function ReaderView({ theme, onToggleTheme, onImmersiveChange }) 
           })
         );
 
-        setChapters(detailedResults);
-
-        if (detailedResults.length > 0) {
-          setPageIndex(0);
-        }
+        setChapters(details);
+        setPageIndex(0);
+        setIsBookOpen(false);
       } catch (err) {
-        setError(err.message);
+        setError(err.message || "Failed to load chapters.");
       } finally {
         setLoading(false);
       }
     }
 
     loadChapters();
-  }, []);
+  }, [selectedBook]);
 
   const bookData = useMemo(() => {
     const pages = [];
@@ -116,11 +133,47 @@ export default function ReaderView({ theme, onToggleTheme, onImmersiveChange }) 
 
   const activePageMeta = bookData.pageMeta[pageIndex] || null;
   const progress = bookData.pages.length > 0 ? ((pageIndex + 1) / bookData.pages.length) * 100 : 0;
+  const chapterSignature = useMemo(() => chapters.map((item) => item._id).join("-"), [chapters]);
 
-  const chapterSignature = useMemo(
-    () => chapters.map((item) => item._id).join("-"),
-    [chapters]
-  );
+  const hasStrictContiguousChapterNumbers = useMemo(() => {
+    if (chapters.length === 0) return false;
+
+    const chapterNumbers = chapters
+      .map((item) => extractChapterNumber(item))
+      .filter((value) => Number.isFinite(value))
+      .sort((a, b) => a - b);
+
+    if (chapterNumbers.length !== chapters.length) {
+      return false;
+    }
+
+    for (let index = 0; index < chapterNumbers.length; index += 1) {
+      if (chapterNumbers[index] !== index + 1) {
+        return false;
+      }
+    }
+
+    return true;
+  }, [chapters]);
+
+  function parseExportRange() {
+    if (!exportFromChapter.trim() && !exportToChapter.trim()) {
+      return { fromChapter: undefined, toChapter: undefined };
+    }
+
+    const fromChapter = Number.parseInt(exportFromChapter, 10);
+    const toChapter = Number.parseInt(exportToChapter, 10);
+
+    if (!Number.isInteger(fromChapter) || !Number.isInteger(toChapter)) {
+      throw new Error("Enter both From and To chapter values for custom export.");
+    }
+
+    if (fromChapter < 1 || toChapter < 1 || fromChapter > toChapter) {
+      throw new Error("Invalid export range. Use positive values and keep From <= To.");
+    }
+
+    return { fromChapter, toChapter };
+  }
 
   function handlePageChange(nextPage) {
     setPageIndex(nextPage);
@@ -142,6 +195,7 @@ export default function ReaderView({ theme, onToggleTheme, onImmersiveChange }) 
     setError("");
     setIsBookOpen(true);
     setPageIndex(targetPage - 1);
+    setBookResetToken((value) => value + 1);
   }
 
   function jumpToChapter() {
@@ -152,10 +206,9 @@ export default function ReaderView({ theme, onToggleTheme, onImmersiveChange }) 
       return;
     }
 
-    let chapter = chapters.find((item) => extractChapterNumber(item.title) === targetChapterNumber);
+    let chapter = chapters.find((item) => extractChapterNumber(item) === targetChapterNumber);
 
-    // Fallback: treat chapter number as 1-based position if title has no explicit number.
-    if (!chapter && targetChapterNumber <= chapters.length) {
+    if (!chapter && hasStrictContiguousChapterNumbers && targetChapterNumber <= chapters.length) {
       chapter = chapters[targetChapterNumber - 1];
     }
 
@@ -174,6 +227,7 @@ export default function ReaderView({ theme, onToggleTheme, onImmersiveChange }) 
     setError("");
     setIsBookOpen(true);
     setPageIndex(startPage);
+    setBookResetToken((value) => value + 1);
   }
 
   function openBookFromStart() {
@@ -199,7 +253,7 @@ export default function ReaderView({ theme, onToggleTheme, onImmersiveChange }) 
     reader.onload = () => {
       const result = typeof reader.result === "string" ? reader.result : "";
       setCoverImage(result);
-      localStorage.setItem("readerCoverImage", result);
+      localStorage.setItem(`readerCoverImage:${selectedBook}`, result);
       setError("");
     };
     reader.readAsDataURL(file);
@@ -213,6 +267,56 @@ export default function ReaderView({ theme, onToggleTheme, onImmersiveChange }) 
 
     if (document.exitFullscreen) {
       await document.exitFullscreen();
+    }
+  }
+
+  async function handleDownloadKindlePdf() {
+    setError("");
+    setDownloadingPdf(true);
+
+    try {
+      const range = parseExportRange();
+      const { blob, fileName } = await downloadPublishedChaptersPdf({
+        book: selectedBook,
+        ...range,
+      });
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      setError(err.message || "Failed to download Kindle PDF.");
+    } finally {
+      setDownloadingPdf(false);
+    }
+  }
+
+  async function handleDownloadEpub() {
+    setError("");
+    setDownloadingEpub(true);
+
+    try {
+      const range = parseExportRange();
+      const { blob, fileName } = await downloadPublishedChaptersEpub({
+        book: selectedBook,
+        ...range,
+      });
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      setError(err.message || "Failed to download EPUB.");
+    } finally {
+      setDownloadingEpub(false);
     }
   }
 
@@ -261,6 +365,26 @@ export default function ReaderView({ theme, onToggleTheme, onImmersiveChange }) 
               Go Page
             </button>
           </div>
+          <div className="jump-controls" role="group" aria-label="Export range">
+            <input
+              className="jump-input"
+              type="number"
+              min="1"
+              inputMode="numeric"
+              placeholder="From ch"
+              value={exportFromChapter}
+              onChange={(event) => setExportFromChapter(event.target.value)}
+            />
+            <input
+              className="jump-input"
+              type="number"
+              min="1"
+              inputMode="numeric"
+              placeholder="To ch"
+              value={exportToChapter}
+              onChange={(event) => setExportToChapter(event.target.value)}
+            />
+          </div>
           <input
             ref={coverInputRef}
             type="file"
@@ -280,6 +404,22 @@ export default function ReaderView({ theme, onToggleTheme, onImmersiveChange }) 
           <button className="theme-toggle" onClick={toggleFullscreen}>
             {isFullscreen ? "Exit Fullscreen" : "Fullscreen Mode"}
           </button>
+          <button
+            className="theme-toggle"
+            onClick={handleDownloadKindlePdf}
+            type="button"
+            disabled={downloadingPdf || downloadingEpub || loading || chapters.length === 0}
+          >
+            {downloadingPdf ? "Preparing Kindle PDF..." : "Kindle PDF"}
+          </button>
+          <button
+            className="theme-toggle"
+            onClick={handleDownloadEpub}
+            type="button"
+            disabled={downloadingPdf || downloadingEpub || loading || chapters.length === 0}
+          >
+            {downloadingEpub ? "Preparing EPUB..." : "Kindle EPUB"}
+          </button>
         </div>
       </div>
 
@@ -293,7 +433,7 @@ export default function ReaderView({ theme, onToggleTheme, onImmersiveChange }) 
               <img src={coverImage} alt="Book cover" className="book-cover-image" />
             ) : (
               <div className="book-cover-fallback">
-                <span className="book-cover-kicker">Your Novel</span>
+                <span className="book-cover-kicker">{selectedBook.toUpperCase()}</span>
                 <strong>{chapters[0]?.title || "Chapter 1"}</strong>
                 <span>Click to Open</span>
               </div>
@@ -321,6 +461,7 @@ export default function ReaderView({ theme, onToggleTheme, onImmersiveChange }) 
           <BookView
             pages={bookData.pages}
             chapterId={chapterSignature}
+            resetToken={bookResetToken}
             isMobile={isMobile}
             isFullscreen={isFullscreen}
             pageIndex={pageIndex}
@@ -336,7 +477,7 @@ export default function ReaderView({ theme, onToggleTheme, onImmersiveChange }) 
         </>
       )}
 
-      {!loading && chapters.length === 0 && !error && <p className="status">No published chapters.</p>}
+      {!loading && chapters.length === 0 && !error && <p className="status">No published chapters in {selectedBook.toUpperCase()}.</p>}
     </section>
   );
 }
