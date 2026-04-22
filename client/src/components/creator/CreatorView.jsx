@@ -12,6 +12,7 @@ export default function CreatorView({ selectedBook, onPublished }) {
   const [removeChapterNumberInput, setRemoveChapterNumberInput] = useState("");
   const [markdownText, setMarkdownText] = useState("");
   const [markdownFileName, setMarkdownFileName] = useState("");
+  const [markdownFiles, setMarkdownFiles] = useState([]);
   const [loadingSinglePublish, setLoadingSinglePublish] = useState(false);
   const [loadingBatchPublish, setLoadingBatchPublish] = useState(false);
   const [loadingDelete, setLoadingDelete] = useState(false);
@@ -27,6 +28,7 @@ export default function CreatorView({ selectedBook, onPublished }) {
     setRemoveChapterNumberInput("");
     setMarkdownText("");
     setMarkdownFileName("");
+    setMarkdownFiles([]);
   }, [selectedBook]);
 
   async function handlePublishSingleChapter() {
@@ -96,6 +98,51 @@ export default function CreatorView({ selectedBook, onPublished }) {
     reader.readAsText(file);
   }
 
+  async function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : "");
+      reader.onerror = () => reject(new Error(`Unable to read ${file.name}`));
+      reader.readAsText(file);
+    });
+  }
+
+  async function handleMarkdownFilesChange(event) {
+    const files = Array.from(event.target.files || []);
+
+    if (files.length === 0) {
+      return;
+    }
+
+    const isAllowed = files.every((file) => file.name.toLowerCase().endsWith(".md") || file.name.toLowerCase().endsWith(".txt"));
+
+    if (!isAllowed) {
+      setError("Upload only .md or .txt files for Book1 multi-file batch publish.");
+      return;
+    }
+
+    setLoadingBatchPublish(true);
+    setError("");
+    setStatus("");
+
+    try {
+      const filePayload = await Promise.all(
+        files.map(async (file) => ({
+          name: file.name,
+          markdown: await readFileAsText(file),
+        }))
+      );
+
+      setMarkdownFiles(filePayload);
+      setMarkdownFileName(`${filePayload.length} file(s) loaded`);
+      setStatus(`Loaded ${filePayload.length} file(s). Ready to publish.`);
+    } catch (err) {
+      setError(err.message || "Unable to read selected files.");
+    } finally {
+      setLoadingBatchPublish(false);
+    }
+  }
+
   async function handlePublishMarkdownBatch() {
     setStatus("");
     setError("");
@@ -119,6 +166,34 @@ export default function CreatorView({ selectedBook, onPublished }) {
       onPublished();
     } catch (err) {
       setError(err.message || "Batch publish failed.");
+    } finally {
+      setLoadingBatchPublish(false);
+    }
+  }
+
+  async function handlePublishMarkdownFilesBatch() {
+    setStatus("");
+    setError("");
+
+    if (markdownFiles.length === 0) {
+      setError("Select one or more MD/TXT files first.");
+      return;
+    }
+
+    setLoadingBatchPublish(true);
+
+    try {
+      const result = await uploadMarkdownChapters({
+        book: "book1",
+        files: markdownFiles,
+      });
+
+      setStatus(`${result.message} Extracted and published successfully.`);
+      setMarkdownFiles([]);
+      setMarkdownFileName("");
+      onPublished();
+    } catch (err) {
+      setError(err.message || "Multi-file batch publish failed.");
     } finally {
       setLoadingBatchPublish(false);
     }
@@ -220,6 +295,27 @@ export default function CreatorView({ selectedBook, onPublished }) {
                 disabled={loadingSinglePublish || loadingBatchPublish || loadingDelete || !markdownText.trim()}
               >
                 {loadingBatchPublish ? "Publishing Batch..." : "Publish MD Batch Immediately"}
+              </button>
+            </div>
+            <label htmlFor="md-multi-upload">Upload multiple Book1 MD/TXT files</label>
+            <input
+              id="md-multi-upload"
+              type="file"
+              accept=".md,.txt,text/markdown,text/plain"
+              multiple
+              onChange={handleMarkdownFilesChange}
+            />
+            {markdownFiles.length > 0 && (
+              <p className="muted">Selected files: {markdownFiles.map((file) => file.name).join(", ")}</p>
+            )}
+            <div className="creator-actions">
+              <button
+                className="accent"
+                type="button"
+                onClick={handlePublishMarkdownFilesBatch}
+                disabled={loadingSinglePublish || loadingBatchPublish || loadingDelete || markdownFiles.length === 0}
+              >
+                {loadingBatchPublish ? "Publishing Files..." : "Publish Selected MD Files"}
               </button>
             </div>
           </>

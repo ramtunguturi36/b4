@@ -5,9 +5,23 @@ import ReaderView from "./components/reader/ReaderView";
 export default function App() {
   const [activeTab, setActiveTab] = useState("reader");
   const [selectedBook, setSelectedBook] = useState("book1");
+  const [bookTitles, setBookTitles] = useState(() => ({
+    book1: localStorage.getItem("bookTitle:book1") || "Before we met",
+    book2: localStorage.getItem("bookTitle:book2") || "Before You Were Mine",
+  }));
   const [theme, setTheme] = useState("light");
   const [refreshSignal, setRefreshSignal] = useState(0);
   const [immersiveMode, setImmersiveMode] = useState(false);
+
+  function handleBookTitleChange(event) {
+    const value = event.target.value;
+
+    setBookTitles((current) => {
+      const next = { ...current, [selectedBook]: value };
+      localStorage.setItem(`bookTitle:${selectedBook}`, value);
+      return next;
+    });
+  }
 
   function toggleTheme() {
     setTheme((current) => (current === "light" ? "dark" : "light"));
@@ -45,6 +59,15 @@ export default function App() {
             Book2
           </button>
         </div>
+        <input
+          className="jump-input"
+          style={{ maxWidth: 320, marginTop: 8 }}
+          type="text"
+          value={bookTitles[selectedBook]}
+          onChange={handleBookTitleChange}
+          placeholder="Book title"
+          aria-label="Book title"
+        />
       </header>
 
       <main>
@@ -52,6 +75,7 @@ export default function App() {
           <ReaderView
             key={`${selectedBook}-${refreshSignal}`}
             selectedBook={selectedBook}
+            bookTitle={bookTitles[selectedBook]}
             theme={theme}
             onToggleTheme={toggleTheme}
             onImmersiveChange={setImmersiveMode}

@@ -16,6 +16,13 @@ function normalizeBook(value) {
   return value === "book2" ? "book2" : "book1";
 }
 
+function sanitizeFileNamePart(value) {
+  return String(value || "")
+    .replace(/[\\/:*?"<>|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim() || "novel";
+}
+
 function extractChapterNumber(title) {
   const match = String(title || "").match(/^\s*chapter\s*(\d+)\b/i);
   return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
@@ -28,6 +35,22 @@ function resolveChapterNumber(title, chapterNumber) {
 
   const parsed = extractChapterNumber(title);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function extractChapterNumberFromText(text) {
+  const match = String(text || "").match(/^\s*chapter\s*(\d+)\b/im);
+  return match ? Number.parseInt(match[1], 10) : null;
+}
+
+function extractChapterTitleFromText(text) {
+  const match = String(text || "").match(/^\s*chapter\s*\d+\s*[—\-:]+\s*(.+)$/im);
+  return match ? match[1].trim() : "";
+}
+
+function stripLeadingChapterHeader(text) {
+  return String(text || "")
+    .replace(/^\s*chapter\s*\d+\s*[—\-:]\s*.*(?:\r?\n)?/i, "")
+    .trim();
 }
 
 function getBookQuery(book, includeLegacyBook1 = true) {
@@ -116,18 +139,71 @@ function parseMarkdownChapters(markdownText) {
   }).filter((chapter) => chapter.rawText.length > 0);
 }
 
-function applyRangeFilter(chapters, fromChapter, toChapter) {
-  if (!Number.isInteger(fromChapter) && !Number.isInteger(toChapter)) {
-    return chapters;
+function parseMarkdownFileAsSingleChapter(file) {
+  const markdown = String(file?.markdown || file?.content || file?.text || "");
+  const parsedChapters = parseMarkdownChapters(markdown);
+
+  if (parsedChapters.length > 1) {
+    throw new Error(`File ${file?.name || "one of the uploaded files"} contains multiple chapters. Use one chapter per file in multi-file upload.`);
   }
 
-  if (!Number.isInteger(fromChapter) || !Number.isInteger(toChapter)) {
-    throw new Error("Both fromChapter and toChapter are required for range export.");
+  if (parsedChapters.length === 1) {
+    return parsedChapters[0];
   }
 
-  if (fromChapter < 1 || toChapter < 1 || fromChapter > toChapter) {
+  const chapterNumber = extractChapterNumberFromText(markdown)
+    ?? extractChapterNumberFromText(file?.name);
+
+  if (!Number.isInteger(chapterNumber) || chapterNumber < 1) {
+    throw new Error(`Could not determine chapter number for ${file?.name || "one of the uploaded files"}.`);
+  }
+
+  const titleFromText = extractChapterTitleFromText(markdown);
+  const titleFromName = String(file?.name || "")
+    .replace(/\.[^.]+$/, "")
+    .replace(/[_-]+/g, " ")
+    .trim();
+
+  const rawText = markdown
+    .replace(/^\s*##?\s*CHAPTER\s*\d+\s*[—\-:]\s*.*(?:\r?\n)?/im, "")
+    .trim();
+
+  return {
+    chapterNumber,
+    title: `Chapter ${chapterNumber} — ${titleFromText || titleFromName || `Chapter ${chapterNumber}`}`,
+    rawText: stripLeadingChapterHeader(rawText) || rawText,
+  };
+}
+
+function resolveRequestedRange(chapters, fromChapter, toChapter) {
+  if (chapters.length === 0) {
+    return { fromChapter: undefined, toChapter: undefined };
+  }
+
+  const chapterNumbers = chapters
+    .map((chapter) => Number.isInteger(chapter.chapterNumber) && chapter.chapterNumber > 0
+      ? chapter.chapterNumber
+      : extractChapterNumber(chapter.title))
+    .filter((value) => Number.isFinite(value));
+
+  const minChapter = Math.min(...chapterNumbers);
+  const maxChapter = Math.max(...chapterNumbers);
+
+  const resolvedFrom = Number.isInteger(fromChapter) ? fromChapter : minChapter;
+  const resolvedTo = Number.isInteger(toChapter) ? toChapter : maxChapter;
+
+  if (resolvedFrom < 1 || resolvedTo < 1 || resolvedFrom > resolvedTo) {
     throw new Error("Invalid chapter range. Use positive values with fromChapter <= toChapter.");
   }
+
+  return {
+    fromChapter: resolvedFrom,
+    toChapter: resolvedTo,
+  };
+}
+
+function applyRangeFilter(chapters, fromChapter, toChapter) {
+  const range = resolveRequestedRange(chapters, fromChapter, toChapter);
 
   const chapterMap = new Map();
   chapters.forEach((chapter) => {
@@ -143,7 +219,7 @@ function applyRangeFilter(chapters, fromChapter, toChapter) {
   const missing = [];
   const selected = [];
 
-  for (let number = fromChapter; number <= toChapter; number += 1) {
+  for (let number = range.fromChapter; number <= range.toChapter; number += 1) {
     const chapter = chapterMap.get(number);
 
     if (!chapter) {
@@ -166,9 +242,10 @@ function createPdfFileName(chapters, suffix = "") {
     .map((chapter) => Number.isInteger(chapter.chapterNumber) ? chapter.chapterNumber : extractChapterNumber(chapter.title))
     .filter((value) => Number.isFinite(value));
 
+  const minChapter = chapterNumbers.length > 0 ? Math.min(...chapterNumbers) : 1;
   const maxChapter = chapterNumbers.length > 0 ? Math.max(...chapterNumbers) : chapters.length;
-  const tail = suffix ? `-${suffix}` : "";
-  return `novel-up-to-chapter-${maxChapter}${tail}.pdf`;
+  const tail = suffix ? `.${suffix}` : "";
+  return { minChapter, maxChapter, tail };
 }
 
 function createEpubFileName(chapters) {
@@ -176,8 +253,14 @@ function createEpubFileName(chapters) {
     .map((chapter) => Number.isInteger(chapter.chapterNumber) ? chapter.chapterNumber : extractChapterNumber(chapter.title))
     .filter((value) => Number.isFinite(value));
 
+  const minChapter = chapterNumbers.length > 0 ? Math.min(...chapterNumbers) : 1;
   const maxChapter = chapterNumbers.length > 0 ? Math.max(...chapterNumbers) : chapters.length;
-  return `novel-up-to-chapter-${maxChapter}-kindle.epub`;
+  return { minChapter, maxChapter };
+}
+
+function formatExportFileName(bookTitle, fromChapter, toChapter, extension) {
+  const safeTitle = sanitizeFileNamePart(bookTitle);
+  return `${safeTitle}(${fromChapter}-${toChapter}).${extension}`;
 }
 
 function escapeHtml(value) {
@@ -295,7 +378,7 @@ chapterRouter.post("/manual-publish", async (req, res) => {
     }
 
     const title = customTitle || `Chapter ${chapterNumber}`;
-    const cleanedRawText = rawText.replace(/^\s*chapter\s*\d+\s*[:\-—].*$/i, "").trim() || rawText;
+    const cleanedRawText = stripLeadingChapterHeader(rawText) || rawText;
 
     const chapter = await Chapter.create({
       book,
@@ -317,15 +400,37 @@ chapterRouter.post("/upload-md", async (req, res) => {
   try {
     const book = normalizeBook(req.body.book || "book1");
     const markdown = String(req.body.markdown || "");
+    const files = Array.isArray(req.body.files) ? req.body.files : [];
 
     if (book !== "book1") {
       return res.status(400).json({ message: "Markdown batch upload is supported only for book1." });
     }
 
-    const parsed = parseMarkdownChapters(markdown);
+    let parsed = [];
+
+    if (files.length > 0) {
+      parsed = files.map(parseMarkdownFileAsSingleChapter);
+    } else {
+      parsed = parseMarkdownChapters(markdown);
+    }
 
     if (parsed.length === 0) {
       return res.status(400).json({ message: "No chapters found. Use headers like: ## CHAPTER 41 — Title" });
+    }
+
+    const sortedParsed = [...parsed].sort((a, b) => a.chapterNumber - b.chapterNumber);
+
+    for (let index = 1; index < sortedParsed.length; index += 1) {
+      const previous = sortedParsed[index - 1].chapterNumber;
+      const current = sortedParsed[index].chapterNumber;
+
+      if (current === previous) {
+        return res.status(400).json({ message: `Duplicate chapter number ${current} in upload.` });
+      }
+
+      if (current !== previous + 1) {
+        return res.status(400).json({ message: `Missing chapter number ${previous + 1} in uploaded batch.` });
+      }
     }
 
     const duplicateInPayload = parsed
@@ -339,7 +444,7 @@ chapterRouter.post("/upload-md", async (req, res) => {
     const existing = await Chapter.find(
       {
         ...getBookQuery(book),
-        chapterNumber: { $in: parsed.map((item) => item.chapterNumber) },
+        chapterNumber: { $in: sortedParsed.map((item) => item.chapterNumber) },
       },
       { chapterNumber: 1 }
     ).lean();
@@ -350,7 +455,7 @@ chapterRouter.post("/upload-md", async (req, res) => {
       });
     }
 
-    const docs = parsed.map((item) => ({
+    const docs = sortedParsed.map((item) => ({
       book,
       chapterNumber: item.chapterNumber,
       title: item.title,
@@ -382,6 +487,7 @@ chapterRouter.get("/export/pdf", async (req, res) => {
     const mode = req.query.mode === "kindle" ? "kindle" : "styled";
     const fromChapter = req.query.fromChapter ? Number.parseInt(req.query.fromChapter, 10) : null;
     const toChapter = req.query.toChapter ? Number.parseInt(req.query.toChapter, 10) : null;
+    const bookTitle = String(req.query.bookTitle || req.query.title || req.query.bookName || book).trim();
 
     const chapters = await Chapter.find(
       { ...getBookQuery(book), isPublished: true },
@@ -401,9 +507,8 @@ chapterRouter.get("/export/pdf", async (req, res) => {
       return res.status(400).json({ message: rangeError.message });
     }
 
-    const fileName = mode === "kindle"
-      ? createPdfFileName(selectedChapters, "kindle")
-      : createPdfFileName(selectedChapters);
+    const resolvedRange = resolveRequestedRange(selectedChapters, fromChapter, toChapter);
+    const fileName = formatExportFileName(bookTitle, resolvedRange.fromChapter, resolvedRange.toChapter, mode === "kindle" ? "pdf" : "pdf");
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
@@ -412,14 +517,14 @@ chapterRouter.get("/export/pdf", async (req, res) => {
       size: mode === "kindle" ? [432, 648] : "A4",
       margin: mode === "kindle" ? 52 : 56,
       info: {
-        Title: mode === "kindle" ? `Novel Export (${book}, Kindle)` : `Novel Export (${book})`,
+        Title: mode === "kindle" ? `${bookTitle} (${resolvedRange.fromChapter}-${resolvedRange.toChapter})` : `${bookTitle} (${resolvedRange.fromChapter}-${resolvedRange.toChapter})`,
         Author: "Novel Reading Platform",
       },
     });
 
     doc.pipe(res);
 
-    writeCoverPage(doc, selectedChapters, mode === "kindle" ? `${book.toUpperCase()} Kindle Export` : `${book.toUpperCase()} Export`);
+    writeCoverPage(doc, selectedChapters, mode === "kindle" ? `${sanitizeFileNamePart(bookTitle)} Kindle Export` : `${sanitizeFileNamePart(bookTitle)} Export`);
 
     selectedChapters.forEach((chapter) => {
       writeKindleChapter(doc, chapter);
@@ -442,6 +547,7 @@ chapterRouter.get("/export/epub", async (req, res) => {
     const book = normalizeBook(req.query.book);
     const fromChapter = req.query.fromChapter ? Number.parseInt(req.query.fromChapter, 10) : null;
     const toChapter = req.query.toChapter ? Number.parseInt(req.query.toChapter, 10) : null;
+    const bookTitle = String(req.query.bookTitle || req.query.title || req.query.bookName || book).trim();
 
     const chapters = await Chapter.find(
       { ...getBookQuery(book), isPublished: true },
@@ -461,7 +567,8 @@ chapterRouter.get("/export/epub", async (req, res) => {
       return res.status(400).json({ message: rangeError.message });
     }
 
-    const fileName = createEpubFileName(selectedChapters);
+    const resolvedRange = resolveRequestedRange(selectedChapters, fromChapter, toChapter);
+    const fileName = formatExportFileName(bookTitle, resolvedRange.fromChapter, resolvedRange.toChapter, "epub");
     outputPath = path.join(os.tmpdir(), `${randomUUID()}.epub`);
 
     const content = selectedChapters.map((chapter) => ({
@@ -496,7 +603,7 @@ chapterRouter.get("/export/epub", async (req, res) => {
     `;
 
     await new Epub({
-      title: `${book.toUpperCase()} Export`,
+      title: `${bookTitle} (${resolvedRange.fromChapter}-${resolvedRange.toChapter})`,
       author: "Novel Reading Platform",
       publisher: "Novel Reading Platform",
       output: outputPath,

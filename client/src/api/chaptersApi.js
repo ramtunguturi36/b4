@@ -60,12 +60,14 @@ export function removeChapterByNumber(chapterNumber, book = "book1") {
 export async function downloadPublishedChaptersPdf(options = {}) {
   const {
     book = "book1",
+    bookTitle,
     fromChapter,
     toChapter,
   } = options;
 
   const query = toQueryString({
     book,
+    bookTitle,
     mode: "kindle",
     fromChapter,
     toChapter,
@@ -97,12 +99,14 @@ export async function downloadPublishedChaptersPdf(options = {}) {
 export async function downloadPublishedChaptersEpub(options = {}) {
   const {
     book = "book1",
+    bookTitle,
     fromChapter,
     toChapter,
   } = options;
 
   const query = toQueryString({
     book,
+    bookTitle,
     fromChapter,
     toChapter,
   });

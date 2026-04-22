@@ -28,7 +28,7 @@ function sortChapters(a, b) {
   return new Date(a.createdAt || a.updatedAt || 0) - new Date(b.createdAt || b.updatedAt || 0);
 }
 
-export default function ReaderView({ selectedBook, theme, onToggleTheme, onImmersiveChange }) {
+export default function ReaderView({ selectedBook, bookTitle, theme, onToggleTheme, onImmersiveChange }) {
   const [chapters, setChapters] = useState([]);
   const [pageIndex, setPageIndex] = useState(0);
   const [bookResetToken, setBookResetToken] = useState(0);
@@ -161,14 +161,22 @@ export default function ReaderView({ selectedBook, theme, onToggleTheme, onImmer
       return { fromChapter: undefined, toChapter: undefined };
     }
 
-    const fromChapter = Number.parseInt(exportFromChapter, 10);
-    const toChapter = Number.parseInt(exportToChapter, 10);
+    const fromChapter = exportFromChapter.trim() ? Number.parseInt(exportFromChapter, 10) : undefined;
+    const toChapter = exportToChapter.trim() ? Number.parseInt(exportToChapter, 10) : undefined;
 
-    if (!Number.isInteger(fromChapter) || !Number.isInteger(toChapter)) {
-      throw new Error("Enter both From and To chapter values for custom export.");
+    if ((exportFromChapter.trim() && !Number.isInteger(fromChapter)) || (exportToChapter.trim() && !Number.isInteger(toChapter))) {
+      throw new Error("Enter valid chapter numbers for custom export.");
     }
 
-    if (fromChapter < 1 || toChapter < 1 || fromChapter > toChapter) {
+    if (fromChapter !== undefined && fromChapter < 1) {
+      throw new Error("From chapter must be 1 or greater.");
+    }
+
+    if (toChapter !== undefined && toChapter < 1) {
+      throw new Error("To chapter must be 1 or greater.");
+    }
+
+    if (fromChapter !== undefined && toChapter !== undefined && fromChapter > toChapter) {
       throw new Error("Invalid export range. Use positive values and keep From <= To.");
     }
 
@@ -278,6 +286,7 @@ export default function ReaderView({ selectedBook, theme, onToggleTheme, onImmer
       const range = parseExportRange();
       const { blob, fileName } = await downloadPublishedChaptersPdf({
         book: selectedBook,
+        bookTitle,
         ...range,
       });
       const objectUrl = URL.createObjectURL(blob);
@@ -303,6 +312,7 @@ export default function ReaderView({ selectedBook, theme, onToggleTheme, onImmer
       const range = parseExportRange();
       const { blob, fileName } = await downloadPublishedChaptersEpub({
         book: selectedBook,
+        bookTitle,
         ...range,
       });
       const objectUrl = URL.createObjectURL(blob);
@@ -434,7 +444,7 @@ export default function ReaderView({ selectedBook, theme, onToggleTheme, onImmer
             ) : (
               <div className="book-cover-fallback">
                 <span className="book-cover-kicker">{selectedBook.toUpperCase()}</span>
-                <strong>{chapters[0]?.title || "Chapter 1"}</strong>
+                <strong>{bookTitle || chapters[0]?.title || "Chapter 1"}</strong>
                 <span>Click to Open</span>
               </div>
             )}
