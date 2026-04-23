@@ -12,6 +12,13 @@ export const chapterRouter = express.Router();
 const require = createRequire(import.meta.url);
 const Epub = require("epub-gen");
 
+class UserInputError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "UserInputError";
+  }
+}
+
 function normalizeBook(value) {
   return value === "book2" ? "book2" : "book1";
 }
@@ -143,19 +150,15 @@ function parseMarkdownFileAsSingleChapter(file) {
   const markdown = String(file?.markdown || file?.content || file?.text || "");
   const parsedChapters = parseMarkdownChapters(markdown);
 
-  if (parsedChapters.length > 1) {
-    throw new Error(`File ${file?.name || "one of the uploaded files"} contains multiple chapters. Use one chapter per file in multi-file upload.`);
-  }
-
-  if (parsedChapters.length === 1) {
-    return parsedChapters[0];
+  if (parsedChapters.length > 0) {
+    return parsedChapters;
   }
 
   const chapterNumber = extractChapterNumberFromText(markdown)
     ?? extractChapterNumberFromText(file?.name);
 
   if (!Number.isInteger(chapterNumber) || chapterNumber < 1) {
-    throw new Error(`Could not determine chapter number for ${file?.name || "one of the uploaded files"}.`);
+    throw new UserInputError(`Could not determine chapter number for ${file?.name || "one of the uploaded files"}.`);
   }
 
   const titleFromText = extractChapterTitleFromText(markdown);
@@ -168,11 +171,11 @@ function parseMarkdownFileAsSingleChapter(file) {
     .replace(/^\s*##?\s*CHAPTER\s*\d+\s*[—\-:]\s*.*(?:\r?\n)?/im, "")
     .trim();
 
-  return {
+  return [{
     chapterNumber,
     title: `Chapter ${chapterNumber} — ${titleFromText || titleFromName || `Chapter ${chapterNumber}`}`,
     rawText: stripLeadingChapterHeader(rawText) || rawText,
-  };
+  }];
 }
 
 function resolveRequestedRange(chapters, fromChapter, toChapter) {
@@ -409,7 +412,7 @@ chapterRouter.post("/upload-md", async (req, res) => {
     let parsed = [];
 
     if (files.length > 0) {
-      parsed = files.map(parseMarkdownFileAsSingleChapter);
+      parsed = files.flatMap(parseMarkdownFileAsSingleChapter);
     } else {
       parsed = parseMarkdownChapters(markdown);
     }
@@ -477,6 +480,10 @@ chapterRouter.post("/upload-md", async (req, res) => {
       })),
     });
   } catch (error) {
+    if (error instanceof UserInputError) {
+      return res.status(400).json({ message: error.message });
+    }
+
     return res.status(500).json({ message: error.message });
   }
 });
