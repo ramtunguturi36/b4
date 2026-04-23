@@ -8,6 +8,33 @@ export function paginateContent(content, isMobile) {
   let current = [];
   let units = 0;
 
+  const chunkTextBySize = (text, maxCharsPerChunk) => {
+    const words = String(text || "").trim().split(/\s+/).filter(Boolean);
+    if (words.length === 0) {
+      return [];
+    }
+
+    const chunks = [];
+    let chunk = "";
+
+    for (const word of words) {
+      const next = chunk ? `${chunk} ${word}` : word;
+
+      if (next.length > maxCharsPerChunk && chunk) {
+        chunks.push(chunk);
+        chunk = word;
+      } else {
+        chunk = next;
+      }
+    }
+
+    if (chunk) {
+      chunks.push(chunk);
+    }
+
+    return chunks;
+  };
+
   const blockCost = (block) => {
     if (block.type === "divider") {
       // Dividers take minimal space (~60px with margins)
@@ -29,7 +56,31 @@ export function paginateContent(content, isMobile) {
     return Math.max(54, estimatedLines * 31 + 18);
   };
 
-  for (const block of content) {
+  const normalizedBlocks = content.flatMap((block) => {
+    if (block.type !== "paragraph" && block.type !== "highlight") {
+      return [block];
+    }
+
+    const cost = blockCost(block);
+    if (cost <= maxUnits) {
+      return [block];
+    }
+
+    // Split very long text blocks so they can span multiple pages safely.
+    const maxCharsPerChunk = isMobile ? 420 : 560;
+    const chunks = chunkTextBySize(block.text, maxCharsPerChunk);
+
+    if (chunks.length === 0) {
+      return [block];
+    }
+
+    return chunks.map((text) => ({
+      ...block,
+      text,
+    }));
+  });
+
+  for (const block of normalizedBlocks) {
     const cost = blockCost(block);
 
     // More aggressive pagination: if adding exceeds limit, start new page
