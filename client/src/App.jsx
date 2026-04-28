@@ -8,6 +8,7 @@ export default function App() {
   const [bookTitles, setBookTitles] = useState(() => ({
     book1: localStorage.getItem("bookTitle:book1") || "Before we met",
     book2: localStorage.getItem("bookTitle:book2") || "Before You Were Mine",
+    book3: localStorage.getItem("bookTitle:book3") || "New Book 3",
   }));
   const [theme, setTheme] = useState("light");
   const [refreshSignal, setRefreshSignal] = useState(0);
@@ -57,6 +58,12 @@ export default function App() {
             onClick={() => setSelectedBook("book2")}
           >
             Book2
+          </button>
+          <button
+            className={selectedBook === "book3" ? "active" : ""}
+            onClick={() => setSelectedBook("book3")}
+          >
+            Book3
           </button>
         </div>
         <input

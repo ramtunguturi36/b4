@@ -20,7 +20,9 @@ class UserInputError extends Error {
 }
 
 function normalizeBook(value) {
-  return value === "book2" ? "book2" : "book1";
+  // Support book2 and book3 as separate legacy-style books; default to book1
+  if (value === "book2" || value === "book3") return value;
+  return "book1";
 }
 
 function sanitizeFileNamePart(value) {
@@ -61,8 +63,9 @@ function stripLeadingChapterHeader(text) {
 }
 
 function getBookQuery(book, includeLegacyBook1 = true) {
-  if (book === "book2") {
-    return { book: "book2" };
+  // For legacy-style books (book2, book3) query explicitly by book
+  if (book === "book2" || book === "book3") {
+    return { book };
   }
 
   if (includeLegacyBook1) {
@@ -650,8 +653,8 @@ chapterRouter.get("/:id", async (req, res) => {
       return res.status(404).json({ message: "Chapter not found" });
     }
 
-    const belongsToBook = book === "book2"
-      ? chapter.book === "book2"
+    const belongsToBook = (book === "book2" || book === "book3")
+      ? chapter.book === book
       : chapter.book === "book1" || typeof chapter.book === "undefined";
 
     if (!belongsToBook) {

@@ -19,7 +19,7 @@ const chapterSchema = new mongoose.Schema(
   {
     book: {
       type: String,
-      enum: ["book1", "book2"],
+      enum: ["book1", "book2", "book3"],
       default: "book1",
       index: true,
     },

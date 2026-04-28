@@ -231,7 +231,7 @@ export default function CreatorView({ selectedBook, onPublished }) {
         <p className="muted">
           {selectedBook === "book1"
             ? "Book1 supports single chapter publish and direct MD batch publish."
-            : "Book2 supports one chapter at a time without styling."}
+            : `${selectedBook.toUpperCase()} supports one chapter at a time without styling.`}
         </p>
 
         <label htmlFor="chapter-number">Chapter Number</label>
@@ -263,7 +263,7 @@ export default function CreatorView({ selectedBook, onPublished }) {
           rows={12}
           value={chapterTextInput}
           onChange={(event) => setChapterTextInput(event.target.value)}
-          placeholder={selectedBook === "book1" ? "Paste one chapter content" : "Paste one chapter content like book2 format"}
+          placeholder={selectedBook === "book1" ? "Paste one chapter content" : `Paste one chapter content like ${selectedBook} format`}
         />
 
         <div className="creator-actions">
